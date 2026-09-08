@@ -1,75 +1,43 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/widgets/timer_display.dart';
-import '../../providers/app_state_provider.dart';
+import '../../providers/crypto_providers.dart';
+import '../../providers/student_quiz_provider.dart';
+import '../../providers/teacher_session_provider.dart';
 import 'quiz_result_screen.dart';
 
-class QuizAttemptScreen extends StatefulWidget {
+class QuizAttemptScreen extends ConsumerStatefulWidget {
   const QuizAttemptScreen({super.key});
 
   @override
-  State<QuizAttemptScreen> createState() => _QuizAttemptScreenState();
+  ConsumerState<QuizAttemptScreen> createState() => _QuizAttemptScreenState();
 }
 
-class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
-  int _currentQuestionIndex = 0;
-  late int _remainingSeconds;
-  late int _totalSeconds;
-  Timer? _countdownTimer;
+class _QuizAttemptScreenState extends ConsumerState<QuizAttemptScreen> {
+  Future<void> _performSubmit() async {
+    final studentKeyPair = await ref.read(studentKeyPairProvider.future);
+    final submission = await ref.read(studentQuizProvider.notifier).submitQuiz(
+          studentKeyPair: studentKeyPair,
+        );
 
-  @override
-  void initState() {
-    super.initState();
-    final appState = context.read<AppStateProvider>();
-    final quiz = appState.activeSession?.quiz;
-    final durationMins = quiz?.timeLimitMinutes ?? 10;
+    // Feed to teacher session if in same runtime/mesh
+    await ref.read(teacherSessionProvider.notifier).processIncomingSubmission(submission);
 
-    _totalSeconds = durationMins * 60;
-    _remainingSeconds = _totalSeconds;
-
-    _startTimer();
-  }
-
-  void _startTimer() {
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_remainingSeconds > 0) {
-        setState(() => _remainingSeconds--);
-      } else {
-        timer.cancel();
-        _handleAutoSubmit();
-      }
-    });
-  }
-
-  void _handleAutoSubmit() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Time is up! Your answers are being automatically submitted.'),
-        backgroundColor: Colors.amber,
-      ),
-    );
-    _performSubmit();
-  }
-
-  void _performSubmit() {
-    _countdownTimer?.cancel();
-    final appState = context.read<AppStateProvider>();
-    final submission = appState.submitQuiz();
-
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => QuizResultScreen(submission: submission),
-      ),
-    );
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => QuizResultScreen(submission: submission),
+        ),
+      );
+    }
   }
 
   void _confirmSubmitDialog(BuildContext context) {
-    final appState = context.read<AppStateProvider>();
-    final quiz = appState.activeSession?.quiz;
-    final answeredCount = appState.studentAnswers.length;
+    final quizState = ref.read(studentQuizProvider);
+    final quiz = quizState.activeQuiz;
+    final answeredCount = quizState.answers.length;
     final totalQuestions = quiz?.questions.length ?? 0;
     final unanswered = totalQuestions - answeredCount;
 
@@ -90,7 +58,7 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
               ),
             ],
             const SizedBox(height: 12),
-            const Text('Are you sure you want to submit your answers now?'),
+            const Text('Your answers will be cryptographically chained and signed with your Ed25519 private key.'),
           ],
         ),
         actions: [
@@ -104,7 +72,7 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
               Navigator.pop(ctx);
               _performSubmit();
             },
-            child: const Text('Confirm & Submit'),
+            child: const Text('Confirm & Sign Submission'),
           ),
         ],
       ),
@@ -112,20 +80,14 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
   }
 
   @override
-  void dispose() {
-    _countdownTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final appState = context.watch<AppStateProvider>();
-    final session = appState.activeSession;
-    final student = appState.currentStudent;
+    final quizState = ref.watch(studentQuizProvider);
+    final quiz = quizState.activeQuiz;
+    final student = quizState.currentStudent;
 
-    if (session == null || session.quiz == null || student == null) {
+    if (quiz == null || student == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Assessment')),
         body: Center(
@@ -146,11 +108,19 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
       );
     }
 
-    final quiz = session.quiz!;
     final questions = quiz.questions;
-    final currentQuestion = questions[_currentQuestionIndex];
-    final selectedOption = appState.studentAnswers[currentQuestion.id];
-    final answeredCount = appState.studentAnswers.length;
+    final currentIndex = quizState.currentQuestionIndex;
+    final currentQuestion = (currentIndex < questions.length) ? questions[currentIndex] : questions.first;
+    final selectedAnswer = quizState.answers[currentQuestion.questionId];
+    final selectedOption = selectedAnswer?.selectedOptionIndex;
+    final answeredCount = quizState.answers.length;
+
+    // Auto submit if timer hit 0
+    if (quizState.remainingSeconds <= 0 && quizState.totalSeconds > 0 && !quizState.isSubmitted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _performSubmit();
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -174,15 +144,15 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
         ),
         actions: [
           TimerDisplay(
-            remainingSeconds: _remainingSeconds,
-            totalSeconds: _totalSeconds,
+            remainingSeconds: quizState.remainingSeconds,
+            totalSeconds: quizState.totalSeconds,
           ),
           const SizedBox(width: 12),
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
             onPressed: () => _confirmSubmitDialog(context),
-            icon: const Icon(Icons.check, size: 18),
-            label: const Text('Submit'),
+            icon: const Icon(Icons.lock, size: 16),
+            label: const Text('Submit & Sign'),
           ),
           const SizedBox(width: 16),
         ],
@@ -210,8 +180,8 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                   runSpacing: 8,
                   children: List.generate(questions.length, (idx) {
                     final q = questions[idx];
-                    final isAnswered = appState.studentAnswers.containsKey(q.id);
-                    final isCurrent = idx == _currentQuestionIndex;
+                    final isAnswered = quizState.answers.containsKey(q.questionId);
+                    final isCurrent = idx == currentIndex;
 
                     Color bg = colorScheme.surface;
                     Color fg = colorScheme.onSurface;
@@ -229,7 +199,7 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
 
                     return InkWell(
                       borderRadius: BorderRadius.circular(10),
-                      onTap: () => setState(() => _currentQuestionIndex = idx),
+                      onTap: () => ref.read(studentQuizProvider.notifier).setQuestionIndex(idx),
                       child: Container(
                         width: 40,
                         height: 40,
@@ -275,7 +245,7 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Text(
-                                'Question ${_currentQuestionIndex + 1} of ${questions.length}',
+                                'Question ${currentIndex + 1} of ${questions.length}',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
@@ -303,9 +273,9 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                         ),
                         const SizedBox(height: 18),
 
-                        // Question Prompt
+                        // Question Body
                         Text(
-                          currentQuestion.text,
+                          currentQuestion.body,
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                             height: 1.4,
@@ -325,7 +295,10 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
                                 onTap: () {
-                                  appState.recordAnswer(currentQuestion.id, optIdx);
+                                  ref.read(studentQuizProvider.notifier).recordAnswer(
+                                        questionId: currentQuestion.questionId,
+                                        response: optIdx.toString(),
+                                      );
                                 },
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
@@ -382,6 +355,21 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                             );
                           }),
                         ),
+
+                        // Autosave & Hash Chain Live Indicator
+                        if (selectedAnswer != null) ...[
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              const Icon(Icons.cloud_done_outlined, size: 14, color: Colors.green),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Autosaved to SQLite • Hash link computed',
+                                style: TextStyle(fontSize: 11, color: Colors.green.shade800),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -393,17 +381,17 @@ class _QuizAttemptScreenState extends State<QuizAttemptScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: _currentQuestionIndex > 0
-                          ? () => setState(() => _currentQuestionIndex--)
+                      onPressed: currentIndex > 0
+                          ? () => ref.read(studentQuizProvider.notifier).setQuestionIndex(currentIndex - 1)
                           : null,
                       icon: const Icon(Icons.arrow_back),
                       label: const Text('Previous'),
                     ),
                     Row(
                       children: [
-                        if (_currentQuestionIndex < questions.length - 1)
+                        if (currentIndex < questions.length - 1)
                           FilledButton.icon(
-                            onPressed: () => setState(() => _currentQuestionIndex++),
+                            onPressed: () => ref.read(studentQuizProvider.notifier).setQuestionIndex(currentIndex + 1),
                             icon: const Icon(Icons.arrow_forward),
                             label: const Text('Next Question'),
                           )

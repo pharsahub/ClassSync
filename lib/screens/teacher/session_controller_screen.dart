@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/widgets/qr_placeholder_widget.dart';
 import '../../core/widgets/status_badge.dart';
 import '../../models/session.dart';
 import '../../models/student.dart';
-import '../../providers/app_state_provider.dart';
+import '../../models/submission.dart';
+import '../../providers/teacher_session_provider.dart';
 import 'submission_review_screen.dart';
 
-class SessionControllerScreen extends StatelessWidget {
+class SessionControllerScreen extends ConsumerWidget {
   const SessionControllerScreen({super.key});
 
   void _copyJoinInfo(BuildContext context, String code) {
@@ -21,12 +23,23 @@ class SessionControllerScreen extends StatelessWidget {
     );
   }
 
+  void _exportCsv(BuildContext context, WidgetRef ref, Session session) {
+    final csv = ref.read(teacherSessionProvider.notifier).exportSessionToCsv(session);
+    Clipboard.setData(ClipboardData(text: csv));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('CSV Report copied to clipboard! (Ready to paste into Excel/Google Sheets)'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final appState = context.watch<AppStateProvider>();
-    final session = appState.activeSession;
+    final teacherState = ref.watch(teacherSessionProvider);
+    final session = teacherState.activeSession;
 
     if (session == null) {
       return Scaffold(
@@ -58,6 +71,7 @@ class SessionControllerScreen extends StatelessWidget {
     final quiz = session.quiz;
     final isLobby = session.status == SessionStatus.waiting;
     final isInProgress = session.status == SessionStatus.inProgress;
+    final qrData = teacherState.qrPayload ?? 'classsync://session/${session.sessionCode}';
 
     return Scaffold(
       appBar: AppBar(
@@ -99,11 +113,17 @@ class SessionControllerScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Export CSV',
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: () => _exportCsv(context, ref, session),
+          ),
+          const SizedBox(width: 8),
           if (isInProgress)
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
               onPressed: () {
-                _showEndSessionDialog(context, appState, session);
+                _showEndSessionDialog(context, ref, session);
               },
               icon: const Icon(Icons.stop_circle_outlined),
               label: const Text('End Session'),
@@ -112,7 +132,7 @@ class SessionControllerScreen extends StatelessWidget {
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
               onPressed: () {
-                appState.startQuizForSession();
+                ref.read(teacherSessionProvider.notifier).startQuizForSession();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Assessment Started! Students can now begin answering.'),
@@ -141,9 +161,9 @@ class SessionControllerScreen extends StatelessWidget {
                   alignment: WrapAlignment.center,
                   crossAxisAlignment: WrapCrossAlignment.start,
                   children: [
-                    // QR Card
+                    // QR Card with signed session payload
                     QrDisplayCard(
-                      sessionData: 'classsync://session/${session.sessionCode}',
+                      sessionData: qrData,
                       sessionCode: session.sessionCode,
                       quizTitle: quiz?.title ?? 'Quiz Session',
                       size: 200,
@@ -161,11 +181,32 @@ class SessionControllerScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Session Information',
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Session Information',
+                                        style: theme.textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: Colors.teal.shade50,
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: Colors.teal.shade300),
+                                        ),
+                                        child: Text(
+                                          'Ed25519 Signed',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.teal.shade900,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 12),
                                   _buildInfoRow(
@@ -189,13 +230,24 @@ class SessionControllerScreen extends StatelessWidget {
                                     Icons.school_outlined,
                                   ),
                                   const Divider(height: 24),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: OutlinedButton.icon(
-                                      onPressed: () => _copyJoinInfo(context, session.sessionCode),
-                                      icon: const Icon(Icons.copy, size: 16),
-                                      label: const Text('Copy Session Code'),
-                                    ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () => _copyJoinInfo(context, session.sessionCode),
+                                          icon: const Icon(Icons.copy, size: 16),
+                                          label: const Text('Copy Code'),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: FilledButton.tonalIcon(
+                                          onPressed: () => _exportCsv(context, ref, session),
+                                          icon: const Icon(Icons.table_chart_outlined, size: 16),
+                                          label: const Text('Export CSV'),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -224,10 +276,10 @@ class SessionControllerScreen extends StatelessWidget {
                               const SizedBox(width: 12),
                               _buildStatCard(
                                 context,
-                                label: 'Submitted',
-                                value: '${session.submittedCount}',
+                                label: 'Verified Subs',
+                                value: '${session.submissions.where((s) => s.isSignatureVerified).length}',
                                 color: Colors.green.shade800,
-                                icon: Icons.check_circle_outline,
+                                icon: Icons.verified_outlined,
                               ),
                             ],
                           ),
@@ -246,11 +298,11 @@ class SessionControllerScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Live Student Roster (${session.studentCount})',
+                          'Live Student Submissions & Roster (${session.submissions.length})',
                           style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         Text(
-                          'Real-time participant connection status and progress updates.',
+                          'All incoming submissions undergo Ed25519 signature + hash chain verification.',
                           style: theme.textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       ],
@@ -266,28 +318,28 @@ class SessionControllerScreen extends StatelessWidget {
                           );
                         },
                         icon: const Icon(Icons.analytics_outlined),
-                        label: const Text('View Live Submissions'),
+                        label: const Text('View Full Review Sheet'),
                       ),
                   ],
                 ),
                 const SizedBox(height: 16),
 
-                if (session.connectedStudents.isEmpty)
+                if (session.submissions.isEmpty && session.connectedStudents.isEmpty)
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
                       child: Center(
                         child: Column(
                           children: [
-                            Icon(Icons.qr_code_scanner, size: 48, color: colorScheme.outline),
+                            Icon(Icons.sensors, size: 48, color: colorScheme.outline),
                             const SizedBox(height: 12),
                             const Text(
-                              'Waiting for students to join...',
+                              'Waiting for student submissions...',
                               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Students can enter code "${session.sessionCode}" in the Student Portal or scan the QR code above.',
+                              'Students can join using code "${session.sessionCode}" or scanning the QR code.',
                               textAlign: TextAlign.center,
                               style: TextStyle(color: colorScheme.onSurfaceVariant),
                             ),
@@ -301,50 +353,79 @@ class SessionControllerScreen extends StatelessWidget {
                     child: ListView.separated(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: session.connectedStudents.length,
+                      itemCount: session.submissions.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (context, idx) {
-                        final student = session.connectedStudents[idx];
-                        final sub = session.submissions.cast<dynamic>().firstWhere(
-                              (s) => s.studentId == student.id,
-                              orElse: () => null,
-                            );
+                        final sub = session.submissions[idx];
+                        final isVerified = sub.isSignatureVerified && sub.isHashChainVerified;
+                        final isRejected = sub.status == SubmissionStatus.rejected;
 
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                           leading: CircleAvatar(
-                            backgroundColor: colorScheme.primaryContainer,
-                            foregroundColor: colorScheme.onPrimaryContainer,
-                            child: Text(
-                              student.name.split(' ').map((e) => e.isNotEmpty ? e[0] : '').take(2).join(),
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            backgroundColor: isRejected
+                                ? Colors.red.shade100
+                                : (isVerified ? Colors.green.shade100 : Colors.blue.shade100),
+                            foregroundColor: isRejected
+                                ? Colors.red.shade900
+                                : (isVerified ? Colors.green.shade900 : Colors.blue.shade900),
+                            child: Icon(
+                              isRejected ? Icons.error_outline : (isVerified ? Icons.verified : Icons.assignment_outlined),
+                              size: 18,
                             ),
                           ),
-                          title: Text(student.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          subtitle: Text('Roll: ${student.rollNumber} • ${student.status.label}'),
+                          title: Row(
+                            children: [
+                              Text(
+                                sub.studentName.isNotEmpty ? sub.studentName : sub.studentId,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  sub.studentRollNumber.isNotEmpty ? sub.studentRollNumber : sub.studentId,
+                                  style: TextStyle(fontSize: 10, color: colorScheme.onSurfaceVariant),
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Text(
+                            isRejected
+                                ? 'REJECTED: ${sub.verificationError ?? "Verification Failed"}'
+                                : 'Deterministic ID: ${sub.submissionId} • ${sub.answers.length} Answers Chained',
+                            style: TextStyle(
+                              color: isRejected ? Colors.red.shade800 : null,
+                              fontSize: 12,
+                            ),
+                          ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (sub != null) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green.shade50,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.green.shade300),
-                                  ),
-                                  child: Text(
-                                    'Score: ${sub.score}/${sub.totalPossibleMarks} (${sub.percentage.toStringAsFixed(0)}%)',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.green.shade900,
-                                      fontSize: 12,
-                                    ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isRejected ? Colors.red.shade50 : Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isRejected ? Colors.red.shade300 : Colors.green.shade300,
                                   ),
                                 ),
-                                const SizedBox(width: 10),
-                              ],
-                              StatusBadge(status: student.status),
+                                child: Text(
+                                  isRejected
+                                      ? 'REJECTED ❌'
+                                      : 'Score: ${sub.score}/${sub.totalPossibleMarks} (${sub.percentage.toStringAsFixed(0)}%) ✅',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isRejected ? Colors.red.shade900 : Colors.green.shade900,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         );
@@ -362,7 +443,7 @@ class SessionControllerScreen extends StatelessWidget {
 
   void _showEndSessionDialog(
     BuildContext context,
-    AppStateProvider appState,
+    WidgetRef ref,
     Session session,
   ) {
     showDialog(
@@ -379,17 +460,19 @@ class SessionControllerScreen extends StatelessWidget {
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
               final currentSession = session;
-              appState.endSession();
+              await ref.read(teacherSessionProvider.notifier).endSession();
 
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => SubmissionReviewScreen(session: currentSession),
-                ),
-              );
+              if (context.mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SubmissionReviewScreen(session: currentSession),
+                  ),
+                );
+              }
             },
             child: const Text('End & View Results'),
           ),

@@ -1,175 +1,114 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../models/session.dart';
-import '../../providers/app_state_provider.dart';
+import '../../providers/student_quiz_provider.dart';
+import '../../providers/teacher_session_provider.dart';
 import 'quiz_attempt_screen.dart';
 
-class StudentLobbyScreen extends StatefulWidget {
+class StudentLobbyScreen extends ConsumerWidget {
   const StudentLobbyScreen({super.key});
 
   @override
-  State<StudentLobbyScreen> createState() => _StudentLobbyScreenState();
-}
-
-class _StudentLobbyScreenState extends State<StudentLobbyScreen> {
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final appState = context.watch<AppStateProvider>();
-    final session = appState.activeSession;
-    final student = appState.currentStudent;
+    final quizState = ref.watch(studentQuizProvider);
+    final teacherState = ref.watch(teacherSessionProvider);
+    final activeSession = teacherState.activeSession;
 
-    // If teacher starts session, automatically transition
-    if (session != null && session.status == SessionStatus.inProgress) {
+    // If teacher starts the session, automatically navigate to attempt screen
+    if (activeSession != null && activeSession.status == SessionStatus.inProgress) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const QuizAttemptScreen()),
-          );
-        }
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const QuizAttemptScreen()),
+        );
       });
     }
 
-    if (session == null || student == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Student Lobby')),
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.link_off, size: 64, color: colorScheme.outline),
-              const SizedBox(height: 16),
-              const Text(
-                'Disconnected from Session',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-              const SizedBox(height: 8),
-              const Text('The session has ended or was closed by the teacher.'),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Back to Join Screen'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final quiz = session.quiz;
+    final student = quizState.currentStudent;
+    final quiz = quizState.activeQuiz;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Waiting Lobby', style: TextStyle(fontWeight: FontWeight.bold)),
-        actions: [
-          TextButton.icon(
-            onPressed: () {
-              appState.resetStudentSession();
-              Navigator.pop(context);
-            },
-            icon: const Icon(Icons.exit_to_app),
-            label: const Text('Leave Lobby'),
-          ),
-          const SizedBox(width: 8),
-        ],
+        title: const Text('Assessment Lobby'),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 600),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Animated Radar Waiting Card
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 80,
-                          height: 80,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: colorScheme.primaryContainer.withValues(alpha: 0.6),
-                          ),
-                          child: const Center(
-                            child: SizedBox(
-                              width: 44,
-                              height: 44,
-                              child: CircularProgressIndicator(strokeWidth: 3),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          'Waiting for Teacher to Start...',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'You are connected. As soon as your teacher starts the assessment, your questions will appear automatically.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.amber.shade300, width: 2),
                   ),
+                  child: Icon(Icons.hourglass_top_rounded, size: 64, color: Colors.amber.shade800),
                 ),
                 const SizedBox(height: 24),
-
-                // Quiz & Student Summary
+                Text(
+                  'Waiting for Teacher to Start Assessment...',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'You have joined "${quiz?.title ?? 'Assessment'}".\nPlease wait until the teacher begins the test.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 24),
                 Card(
                   child: Padding(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Assessment Information',
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Student Name:'),
+                            Text(student?.name ?? 'Student', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          ],
                         ),
-                        const SizedBox(height: 12),
-                        _buildLobbyInfo('Quiz Title', quiz?.title ?? 'Class Assessment'),
-                        _buildLobbyInfo('Instructor', session.teacherName),
-                        _buildLobbyInfo('Session Code', session.sessionCode),
-                        _buildLobbyInfo('Questions', '${quiz?.questionCount ?? 0} Questions (${quiz?.totalMarks ?? 0} Marks)'),
-                        _buildLobbyInfo('Time Limit', '${quiz?.timeLimitMinutes ?? 15} Minutes'),
-                        const Divider(height: 24),
-                        Text(
-                          'Student Profile',
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Roll Number:'),
+                            Text(student?.rollNumber ?? 'N/A', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          ],
                         ),
-                        const SizedBox(height: 12),
-                        _buildLobbyInfo('Student Name', student.name),
-                        _buildLobbyInfo('Roll Number', student.rollNumber),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Quiz Duration:'),
+                            Text('${quiz?.timeLimitMinutes ?? 10} Mins', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          ],
+                        ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 32),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    ref.read(studentQuizProvider.notifier).reset();
+                    Navigator.pop(context);
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Leave Lobby'),
+                ),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildLobbyInfo(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13, color: Colors.grey)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-        ],
       ),
     );
   }

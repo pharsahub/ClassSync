@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/utils/id_generator.dart';
 import '../../models/question.dart';
 import '../../models/quiz.dart';
-import '../../providers/app_state_provider.dart';
+import '../../providers/teacher_session_provider.dart';
 
-class QuizCreatorScreen extends StatefulWidget {
+class QuizCreatorScreen extends ConsumerStatefulWidget {
   const QuizCreatorScreen({super.key});
 
   @override
-  State<QuizCreatorScreen> createState() => _QuizCreatorScreenState();
+  ConsumerState<QuizCreatorScreen> createState() => _QuizCreatorScreenState();
 }
 
-class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
+class _QuizCreatorScreenState extends ConsumerState<QuizCreatorScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
@@ -23,7 +24,6 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
   @override
   void initState() {
     super.initState();
-    // Add default initial question
     _addNewQuestion();
   }
 
@@ -48,9 +48,9 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
 
   void _fillSampleTemplate() {
     setState(() {
-      _titleController.text = 'Cybersecurity & Cryptography Essentials';
+      _titleController.text = 'Cybersecurity & Applied Cryptography';
       _descriptionController.text =
-          'Assessment on symmetric/asymmetric encryption, hashing, and authentication protocols.';
+          'Assessment on symmetric/asymmetric encryption, Ed25519 signatures, and hash chains.';
       _timeLimitMinutes = 15;
 
       _questions.clear();
@@ -58,17 +58,17 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
         _QuestionDraft(
           id: IdGenerator.generate('q'),
           textController: TextEditingController(
-            text: 'Which encryption algorithm uses a pair of public and private keys?',
+            text: 'Which cryptographic algorithm provides digital signatures with 128-bit security on Curve25519?',
           ),
           explanationController: TextEditingController(
-            text: 'Asymmetric cryptography (such as RSA or ECC) uses mathematically linked key pairs.',
+            text: 'Ed25519 is an Edwards-curve Digital Signature Algorithm over Curve25519.',
           ),
           type: QuestionType.mcq,
           optionControllers: [
             TextEditingController(text: 'AES-256'),
-            TextEditingController(text: 'RSA'),
+            TextEditingController(text: 'Ed25519'),
             TextEditingController(text: 'DES'),
-            TextEditingController(text: 'Blowfish'),
+            TextEditingController(text: 'MD5'),
           ],
           correctOptionIndex: 1,
           marks: 2,
@@ -76,10 +76,10 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
         _QuestionDraft(
           id: IdGenerator.generate('q'),
           textController: TextEditingController(
-            text: 'Cryptographic hash functions are strictly one-way and cannot be easily reversed.',
+            text: 'An incremental hash chain detects mid-quiz tampering because altering an answer invalidates all subsequent links.',
           ),
           explanationController: TextEditingController(
-            text: 'Hashes like SHA-256 are deterministic one-way mathematical functions.',
+            text: 'Because each link incorporates the previous link: link[i] = hash(link[i-1] + answer).',
           ),
           type: QuestionType.trueFalse,
           optionControllers: [
@@ -92,19 +92,19 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
         _QuestionDraft(
           id: IdGenerator.generate('q'),
           textController: TextEditingController(
-            text: 'What type of attack involves an adversary intercepting and possibly altering communication between two parties?',
+            text: 'Why does ClassSync use deterministic submission IDs hash(student_id + session_id + device_id)?',
           ),
           explanationController: TextEditingController(
-            text: 'A Man-in-the-Middle (MitM) attack intercepts messages between two endpoints without their consent.',
+            text: 'Deterministic IDs allow duplicate reconnect sync packets to collapse cleanly with zero duplicates.',
           ),
           type: QuestionType.mcq,
           optionControllers: [
-            TextEditingController(text: 'SQL Injection'),
-            TextEditingController(text: 'Cross-Site Scripting (XSS)'),
-            TextEditingController(text: 'Man-in-the-Middle (MitM)'),
-            TextEditingController(text: 'Denial of Service (DoS)'),
+            TextEditingController(text: 'To make packets smaller'),
+            TextEditingController(text: 'For DTN reconnect deduplication'),
+            TextEditingController(text: 'For cloud rendering'),
+            TextEditingController(text: 'To avoid encryption'),
           ],
-          correctOptionIndex: 2,
+          correctOptionIndex: 1,
           marks: 2,
         ),
       ]);
@@ -123,7 +123,7 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
     });
   }
 
-  void _saveQuiz() {
+  Future<void> _saveQuiz() async {
     if (!_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill out all required fields.')),
@@ -138,12 +138,12 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
           : draft.optionControllers.map((c) => c.text.trim()).toList();
 
       return Question(
-        id: draft.id,
+        questionId: draft.id,
         quizId: quizId,
-        text: draft.textController.text.trim(),
+        body: draft.textController.text.trim(),
         type: draft.type,
         options: options,
-        correctOptionIndex: draft.correctOptionIndex,
+        correctAnswer: draft.correctOptionIndex.toString(),
         marks: draft.marks,
         explanation: draft.explanationController.text.trim().isNotEmpty
             ? draft.explanationController.text.trim()
@@ -152,7 +152,8 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
     }).toList();
 
     final newQuiz = Quiz(
-      id: quizId,
+      quizId: quizId,
+      teacherId: 'teacher_1',
       title: _titleController.text.trim(),
       description: _descriptionController.text.trim(),
       timeLimitMinutes: _timeLimitMinutes,
@@ -160,16 +161,17 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
       createdAt: DateTime.now(),
     );
 
-    context.read<AppStateProvider>().createQuiz(newQuiz);
+    await ref.read(teacherSessionProvider.notifier).saveQuiz(newQuiz);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Quiz "${newQuiz.title}" created successfully!'),
-        backgroundColor: Colors.green.shade700,
-      ),
-    );
-
-    Navigator.pop(context);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Quiz "${newQuiz.title}" created and signed with Ed25519!'),
+          backgroundColor: Colors.green.shade700,
+        ),
+      );
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -190,7 +192,6 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-
     final totalMarks = _questions.fold(0, (sum, q) => sum + q.marks);
 
     return Scaffold(
@@ -206,7 +207,7 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
           FilledButton.icon(
             onPressed: _saveQuiz,
             icon: const Icon(Icons.save_outlined, size: 18),
-            label: const Text('Save Quiz'),
+            label: const Text('Save & Sign Quiz'),
           ),
           const SizedBox(width: 16),
         ],
@@ -239,7 +240,7 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
                             controller: _titleController,
                             decoration: const InputDecoration(
                               labelText: 'Quiz Title *',
-                              hintText: 'e.g. Operating Systems: Process Synchronization',
+                              hintText: 'e.g. Distributed Systems Midterm',
                               prefixIcon: Icon(Icons.title),
                             ),
                             validator: (val) =>
@@ -347,12 +348,12 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
                   // Bottom Save Bar
                   Center(
                     child: SizedBox(
-                      width: 260,
+                      width: 280,
                       height: 48,
                       child: FilledButton.icon(
                         onPressed: _saveQuiz,
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Publish & Save Quiz', style: TextStyle(fontSize: 16)),
+                        icon: const Icon(Icons.verified),
+                        label: const Text('Publish & Sign Quiz', style: TextStyle(fontSize: 16)),
                       ),
                     ),
                   ),
@@ -395,7 +396,6 @@ class _QuizCreatorScreenState extends State<QuizCreatorScreen> {
                   style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
-                // Type selector
                 SegmentedButton<QuestionType>(
                   segments: const [
                     ButtonSegment(value: QuestionType.mcq, label: Text('MCQ')),

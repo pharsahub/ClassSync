@@ -1,19 +1,25 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/constants/app_constants.dart';
+import '../../core/crypto/crypto_service.dart';
 import '../../models/session.dart';
-import '../../providers/app_state_provider.dart';
+import '../../models/student.dart';
+import '../../providers/crypto_providers.dart';
+import '../../providers/student_quiz_provider.dart';
+import '../../providers/teacher_session_provider.dart';
 import 'quiz_attempt_screen.dart';
 import 'student_lobby_screen.dart';
 
-class StudentJoinScreen extends StatefulWidget {
+class StudentJoinScreen extends ConsumerStatefulWidget {
   const StudentJoinScreen({super.key});
 
   @override
-  State<StudentJoinScreen> createState() => _StudentJoinScreenState();
+  ConsumerState<StudentJoinScreen> createState() => _StudentJoinScreenState();
 }
 
-class _StudentJoinScreenState extends State<StudentJoinScreen> {
+class _StudentJoinScreenState extends ConsumerState<StudentJoinScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _rollController = TextEditingController();
@@ -26,19 +32,15 @@ class _StudentJoinScreenState extends State<StudentJoinScreen> {
     _rollController.text = 'CS23-018';
   }
 
-  void _joinSession() {
+  Future<void> _joinSession() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final appState = context.read<AppStateProvider>();
+    final teacherState = ref.read(teacherSessionProvider);
+    final activeSession = teacherState.activeSession;
     final code = _codeController.text.trim().toUpperCase();
 
-    final success = appState.joinSession(
-      sessionCode: code,
-      studentName: _nameController.text.trim(),
-      rollNumber: _rollController.text.trim(),
-    );
-
-    if (!success) {
+    if (activeSession == null ||
+        activeSession.sessionCode.toUpperCase().trim() != code) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -50,8 +52,32 @@ class _StudentJoinScreenState extends State<StudentJoinScreen> {
       return;
     }
 
-    final session = appState.activeSession!;
-    if (session.status == SessionStatus.inProgress) {
+    final crypto = ref.read(cryptoServiceProvider);
+    final studentKeyPair = await ref.read(studentKeyPairProvider.future);
+    final studentPubKeyHex = await crypto.exportPublicKeyHex(studentKeyPair);
+
+    final student = Student(
+      studentId: 'std_${_rollController.text.trim().replaceAll('-', '_').toLowerCase()}',
+      name: _nameController.text.trim(),
+      rollNumber: _rollController.text.trim(),
+      publicKey: studentPubKeyHex,
+      classId: 'CS401',
+    );
+
+    // Bootstrap in teacher roster if not already present
+    await ref.read(teacherSessionProvider.notifier).importStudentRoster([student]);
+
+    // Initialize student quiz engine
+    await ref.read(studentQuizProvider.notifier).startQuizSession(
+      student: student,
+      sessionId: activeSession.sessionId,
+      quiz: activeSession.quiz!,
+      teacherPublicKeyHex: teacherState.teacherPublicKeyHex,
+    );
+
+    if (!mounted) return;
+
+    if (activeSession.status == SessionStatus.inProgress) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const QuizAttemptScreen()),
@@ -76,8 +102,8 @@ class _StudentJoinScreenState extends State<StudentJoinScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final appState = context.watch<AppStateProvider>();
-    final activeSession = appState.activeSession;
+    final teacherState = ref.watch(teacherSessionProvider);
+    final activeSession = teacherState.activeSession;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),

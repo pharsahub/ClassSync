@@ -1,36 +1,211 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../core/constants/app_constants.dart';
+import '../../core/crypto/crypto_service.dart';
+import '../../core/sync/cloud_sync_service.dart';
 import '../../models/quiz.dart';
-import '../../providers/app_state_provider.dart';
+import '../../models/session.dart';
+import '../../models/student.dart';
+import '../../providers/teacher_session_provider.dart';
 import 'quiz_creator_screen.dart';
 import 'session_controller_screen.dart';
 import 'submission_review_screen.dart';
 
-class TeacherDashboardScreen extends StatelessWidget {
+class TeacherDashboardScreen extends ConsumerWidget {
   const TeacherDashboardScreen({super.key});
 
-  void _hostSession(BuildContext context, Quiz quiz) {
-    final appState = context.read<AppStateProvider>();
-    appState.startSession(quiz.id);
+  Future<void> _hostSession(BuildContext context, WidgetRef ref, Quiz quiz) async {
+    final notifier = ref.read(teacherSessionProvider.notifier);
+    await notifier.startSession(quiz.quizId);
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const SessionControllerScreen(),
+    if (context.mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const SessionControllerScreen(),
+        ),
+      );
+    }
+  }
+
+  void _showRosterDialog(BuildContext context, WidgetRef ref) {
+    final teacherState = ref.read(teacherSessionProvider);
+    final roster = teacherState.registeredRoster;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.badge_outlined, color: Colors.blue),
+            const SizedBox(width: 10),
+            Text('Registered Student Roster (${roster.length})'),
+          ],
+        ),
+        content: SizedBox(
+          width: 550,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Trust Bootstrapping: Students below have their Ed25519 public keys pre-registered. Submissions are verified against these keys offline.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 16),
+              if (roster.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Center(child: Text('No student keys imported yet.')),
+                )
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: roster.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, idx) {
+                      final s = roster[idx];
+                      return ListTile(
+                        dense: true,
+                        leading: CircleAvatar(
+                          radius: 14,
+                          child: Text('${idx + 1}', style: const TextStyle(fontSize: 10)),
+                        ),
+                        title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text(
+                          'ID: ${s.studentId} • Key: ${s.publicKey.length > 16 ? "${s.publicKey.substring(0, 16)}..." : s.publicKey}',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              // Generate sample students with Ed25519 keys
+              final crypto = CryptoService();
+              final List<Student> sampleList = [];
+              final names = ['Fatima Zahra', 'Amina Al-Mansoor', 'Devon Vance', 'Elena Rostova', 'Marcus Chen'];
+              for (int i = 0; i < names.length; i++) {
+                final kp = await crypto.generateEd25519KeyPair();
+                final pk = await crypto.exportPublicKeyHex(kp);
+                sampleList.add(Student(
+                  studentId: 'std_00${i + 1}',
+                  name: names[i],
+                  publicKey: pk,
+                  classId: 'CS401',
+                  rollNumber: 'CS23-00${i + 1}',
+                ));
+              }
+
+              await ref.read(teacherSessionProvider.notifier).importStudentRoster(sampleList);
+              if (context.mounted) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Imported 5 students with Ed25519 public keys!')),
+                );
+              }
+            },
+            child: const Text('Import Sample Roster'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Done'),
+          ),
+        ],
       ),
     );
   }
 
+  void _showCloudSyncDialog(BuildContext context, Session session) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isLoading = false;
+        String? syncResult;
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.cloud_upload_outlined, color: Colors.blue),
+                  SizedBox(width: 10),
+                  Text('Sync Session to Cloud'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Session: ${session.quiz?.title ?? session.sessionCode} (${session.submissions.length} submissions)'),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Submits validated attendance and graded submissions to FastAPI + PostgreSQL cloud sync endpoint.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  if (syncResult != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: syncResult!.contains('success') ? Colors.green.shade50 : Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: syncResult!.contains('success') ? Colors.green.shade400 : Colors.amber.shade400,
+                        ),
+                      ),
+                      child: Text(syncResult!, style: const TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                FilledButton.icon(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          setState(() => isLoading = true);
+                          final client = CloudSyncService();
+                          final res = await client.syncSessionToCloud(session);
+                          setState(() {
+                            isLoading = false;
+                            syncResult = res.message;
+                          });
+                        },
+                  icon: isLoading
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.sync),
+                  label: const Text('Sync Now'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final appState = context.watch<AppStateProvider>();
+    final teacherState = ref.watch(teacherSessionProvider);
 
-    final quizzes = appState.quizzes;
-    final activeSession = appState.activeSession;
-    final completedSessions = appState.completedSessions;
+    final quizzes = teacherState.quizzes;
+    final activeSession = teacherState.activeSession;
+    final completedSessions = teacherState.completedSessions;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -41,7 +216,7 @@ class TeacherDashboardScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Hero Teacher Banner
-              _buildTeacherHero(context, colorScheme),
+              _buildTeacherHero(context, colorScheme, ref),
               const SizedBox(height: 24),
 
               // Active Session Callout if any
@@ -63,7 +238,7 @@ class TeacherDashboardScreen extends StatelessWidget {
                           style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         Text(
-                          'Manage questions, configure time limits, and host offline pairing sessions.',
+                          'Signed test packages, question builders, and DTN pairing.',
                           style: theme.textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       ],
@@ -111,14 +286,14 @@ class TeacherDashboardScreen extends StatelessWidget {
                   physics: const NeverScrollableScrollPhysics(),
                   gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                     maxCrossAxisExtent: 520,
-                    mainAxisExtent: 210,
+                    mainAxisExtent: 220,
                     crossAxisSpacing: 16,
                     mainAxisSpacing: 16,
                   ),
                   itemCount: quizzes.length,
                   itemBuilder: (context, index) {
                     final quiz = quizzes[index];
-                    final isBeingHosted = activeSession?.quizId == quiz.id;
+                    final isBeingHosted = activeSession?.quizId == quiz.quizId;
 
                     return Card(
                       elevation: 1,
@@ -203,6 +378,18 @@ class TeacherDashboardScreen extends StatelessWidget {
                                     ),
                                   ],
                                 ),
+                                if (quiz.signature != null)
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.verified, size: 14, color: Colors.green),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Signed (Ed25519)',
+                                        style: TextStyle(fontSize: 11, color: Colors.green.shade800),
+                                      ),
+                                    ],
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 12),
@@ -213,7 +400,7 @@ class TeacherDashboardScreen extends StatelessWidget {
                                   tooltip: 'Delete Quiz',
                                   icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey),
                                   onPressed: () {
-                                    appState.deleteQuiz(quiz.id);
+                                    ref.read(teacherSessionProvider.notifier).deleteQuiz(quiz.quizId);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(content: Text('Quiz "${quiz.title}" deleted')),
                                     );
@@ -231,11 +418,11 @@ class TeacherDashboardScreen extends StatelessWidget {
                                       );
                                     },
                                     icon: const Icon(Icons.sensors, size: 16),
-                                    label: const Text('Go to Live Controller'),
+                                    label: const Text('Live Controller'),
                                   )
                                 else
                                   FilledButton.icon(
-                                    onPressed: () => _hostSession(context, quiz),
+                                    onPressed: () => _hostSession(context, ref, quiz),
                                     icon: const Icon(Icons.play_arrow, size: 16),
                                     label: const Text('Host Session'),
                                   ),
@@ -298,16 +485,27 @@ class TeacherDashboardScreen extends StatelessWidget {
                         subtitle: Text(
                           'Code: ${s.sessionCode} • ${s.studentCount} Students • ${subs.length} Submissions • Avg: ${avg.toStringAsFixed(1)}/$totalMarks',
                         ),
-                        trailing: FilledButton.tonal(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => SubmissionReviewScreen(session: s),
-                              ),
-                            );
-                          },
-                          child: const Text('View Results'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Sync to Cloud (Phase 7)',
+                              icon: const Icon(Icons.cloud_upload_outlined, color: Colors.blue),
+                              onPressed: () => _showCloudSyncDialog(context, s),
+                            ),
+                            const SizedBox(width: 6),
+                            FilledButton.tonal(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => SubmissionReviewScreen(session: s),
+                                  ),
+                                );
+                              },
+                              child: const Text('View Results'),
+                            ),
+                          ],
                         ),
                       );
                     },
@@ -321,7 +519,10 @@ class TeacherDashboardScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTeacherHero(BuildContext context, ColorScheme colorScheme) {
+  Widget _buildTeacherHero(BuildContext context, ColorScheme colorScheme, WidgetRef ref) {
+    final teacherState = ref.watch(teacherSessionProvider);
+    final pubKey = teacherState.teacherPublicKeyHex;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
@@ -358,11 +559,16 @@ class TeacherDashboardScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${AppConstants.defaultTeacherDepartment} • Offline-First Assessment Engine',
-                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                  'Ed25519 Key: ${pubKey.length > 20 ? "${pubKey.substring(0, 20)}..." : pubKey} • Roster: ${teacherState.registeredRoster.length} Students',
+                  style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
                 ),
               ],
             ),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => _showRosterDialog(context, ref),
+            icon: const Icon(Icons.group_outlined, size: 16),
+            label: const Text('Manage Roster'),
           ),
         ],
       ),
@@ -371,7 +577,7 @@ class TeacherDashboardScreen extends StatelessWidget {
 
   Widget _buildActiveSessionBanner(
     BuildContext context,
-    dynamic session,
+    Session session,
     ColorScheme colorScheme,
   ) {
     return Container(

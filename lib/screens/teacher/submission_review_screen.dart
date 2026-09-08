@@ -1,16 +1,95 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+
+import '../../core/sync/cloud_sync_service.dart';
 import '../../models/quiz.dart';
 import '../../models/session.dart';
 import '../../models/submission.dart';
+import '../../providers/teacher_session_provider.dart';
 
-class SubmissionReviewScreen extends StatelessWidget {
+class SubmissionReviewScreen extends ConsumerWidget {
   final Session session;
 
   const SubmissionReviewScreen({super.key, required this.session});
 
+  void _exportCsv(BuildContext context, WidgetRef ref) {
+    final csv = ref.read(teacherSessionProvider.notifier).exportSessionToCsv(session);
+    Clipboard.setData(ClipboardData(text: csv));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('CSV Report copied to clipboard! (Ready for Excel/Google Sheets)'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  void _syncToCloud(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isLoading = false;
+        String? message;
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.cloud_sync, color: Colors.blue),
+                  SizedBox(width: 10),
+                  Text('Cloud REST Sync'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Synchronizing session ${session.sessionCode} (${session.submissions.length} submissions) to FastAPI backend...'),
+                  const SizedBox(height: 12),
+                  if (message != null)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: message!.contains('success') ? Colors.green.shade50 : Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(message!, style: const TextStyle(fontSize: 12)),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                FilledButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                          setState(() => isLoading = true);
+                          final client = CloudSyncService();
+                          final res = await client.syncSessionToCloud(session);
+                          setState(() {
+                            isLoading = false;
+                            message = res.message;
+                          });
+                        },
+                  child: isLoading
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('Sync Now'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final quiz = session.quiz;
@@ -47,6 +126,19 @@ class SubmissionReviewScreen extends StatelessWidget {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Sync to Cloud (FastAPI)',
+            icon: const Icon(Icons.cloud_upload_outlined, color: Colors.blue),
+            onPressed: () => _syncToCloud(context),
+          ),
+          IconButton(
+            tooltip: 'Export CSV',
+            icon: const Icon(Icons.download),
+            onPressed: () => _exportCsv(context, ref),
+          ),
+          const SizedBox(width: 12),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -64,8 +156,8 @@ class SubmissionReviewScreen extends StatelessWidget {
                     _buildMetricCard(
                       context,
                       label: 'Submissions',
-                      value: '$totalSubmissions / ${session.studentCount}',
-                      subtext: '${session.studentCount > 0 ? ((totalSubmissions / session.studentCount) * 100).toStringAsFixed(0) : 0}% Turnout',
+                      value: '$totalSubmissions / ${session.studentCount > 0 ? session.studentCount : totalSubmissions}',
+                      subtext: 'Turnout Verified',
                       icon: Icons.assignment_turned_in_outlined,
                       color: colorScheme.primary,
                     ),
@@ -106,7 +198,7 @@ class SubmissionReviewScreen extends StatelessWidget {
                       style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      'Tap a student to view full answer sheet',
+                      'Tap student to inspect Ed25519 signature & hash chain links',
                       style: theme.textTheme.bodySmall?.copyWith(color: colorScheme.outline),
                     ),
                   ],
@@ -147,29 +239,35 @@ class SubmissionReviewScreen extends StatelessWidget {
                         final sub = submissions[index];
                         final timeFormatted = DateFormat('hh:mm a').format(sub.submittedAt);
                         final pct = sub.percentage;
+                        final isRejected = sub.status == SubmissionStatus.rejected;
 
                         Color scoreColor = Colors.red.shade700;
-                        if (pct >= 80) {
-                          scoreColor = Colors.green.shade800;
-                        } else if (pct >= 60) {
-                          scoreColor = Colors.blue.shade800;
-                        } else if (pct >= 40) {
-                          scoreColor = Colors.amber.shade900;
+                        if (!isRejected) {
+                          if (pct >= 80) {
+                            scoreColor = Colors.green.shade800;
+                          } else if (pct >= 60) {
+                            scoreColor = Colors.blue.shade800;
+                          } else if (pct >= 40) {
+                            scoreColor = Colors.amber.shade900;
+                          }
                         }
 
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                           leading: CircleAvatar(
-                            backgroundColor: scoreColor.withValues(alpha: 0.15),
-                            foregroundColor: scoreColor,
-                            child: Text(
-                              '${index + 1}',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            backgroundColor: isRejected ? Colors.red.shade100 : scoreColor.withValues(alpha: 0.15),
+                            foregroundColor: isRejected ? Colors.red.shade900 : scoreColor,
+                            child: Icon(
+                              isRejected ? Icons.close : Icons.verified,
+                              size: 18,
                             ),
                           ),
                           title: Row(
                             children: [
-                              Text(sub.studentName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                              Text(
+                                sub.studentName.isNotEmpty ? sub.studentName : sub.studentId,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
                               const SizedBox(width: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -178,13 +276,37 @@ class SubmissionReviewScreen extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
-                                  sub.studentRollNumber,
+                                  sub.studentRollNumber.isNotEmpty ? sub.studentRollNumber : sub.studentId,
                                   style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
                                 ),
                               ),
+                              const Spacer(),
+                              if (sub.isSignatureVerified)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade50,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.lock_outline, size: 12, color: Colors.green),
+                                      const SizedBox(width: 3),
+                                      Text(
+                                        'Ed25519 & Hash Chain OK',
+                                        style: TextStyle(fontSize: 10, color: Colors.green.shade900, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
-                          subtitle: Text('Submitted at $timeFormatted • ${sub.answers.length} Questions Graded'),
+                          subtitle: Text(
+                            isRejected
+                                ? 'Verification Error: ${sub.verificationError}'
+                                : 'Submitted at $timeFormatted • ${sub.answers.length} Questions Graded',
+                          ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -266,7 +388,6 @@ class SubmissionReviewScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Modal Handle
                   Center(
                     child: Container(
                       width: 40,
@@ -279,7 +400,6 @@ class SubmissionReviewScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // Header
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -287,12 +407,12 @@ class SubmissionReviewScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            sub.studentName,
+                            sub.studentName.isNotEmpty ? sub.studentName : sub.studentId,
                             style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                           ),
                           Text(
-                            'Roll Number: ${sub.studentRollNumber}',
-                            style: TextStyle(color: colorScheme.onSurfaceVariant),
+                            'Roll: ${sub.studentRollNumber} • Sub ID: ${sub.submissionId}',
+                            style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
                           ),
                         ],
                       ),
@@ -313,10 +433,34 @@ class SubmissionReviewScreen extends StatelessWidget {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+
+                  // Crypto signature badge
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: sub.isSignatureVerified ? Colors.green.shade50 : Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: sub.isSignatureVerified ? Colors.green.shade300 : Colors.red.shade300,
+                      ),
+                    ),
+                    child: Text(
+                      sub.isSignatureVerified
+                          ? '✅ Verified Ed25519 Student Signature: ${sub.studentSignature.length > 24 ? "${sub.studentSignature.substring(0, 24)}..." : sub.studentSignature}'
+                          : '❌ Signature Verification Failed',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: sub.isSignatureVerified ? Colors.green.shade900 : Colors.red.shade900,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                   const Divider(height: 24),
 
                   Text(
-                    'Question-by-Question Breakdown',
+                    'Answers & Hash Chain Links',
                     style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
@@ -324,11 +468,15 @@ class SubmissionReviewScreen extends StatelessWidget {
                   Expanded(
                     child: ListView.separated(
                       controller: scrollController,
-                      itemCount: quiz?.questions.length ?? 0,
+                      itemCount: quiz?.questions.length ?? sub.answers.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 16),
                       itemBuilder: (ctx, qIdx) {
-                        final question = quiz!.questions[qIdx];
-                        final answer = sub.answers[question.id];
+                        final question = (quiz != null && qIdx < quiz.questions.length)
+                            ? quiz.questions[qIdx]
+                            : null;
+
+                        final qId = question?.questionId ?? sub.answers.keys.elementAt(qIdx);
+                        final answer = sub.answers[qId];
                         final isCorrect = answer?.isCorrect ?? false;
                         final selectedIdx = answer?.selectedOptionIndex;
 
@@ -361,8 +509,8 @@ class SubmissionReviewScreen extends StatelessWidget {
                                     const Spacer(),
                                     Text(
                                       isCorrect
-                                          ? '+${question.marks} / ${question.marks} Marks'
-                                          : '0 / ${question.marks} Marks',
+                                          ? '+${question?.marks ?? 1} Marks'
+                                          : '0 / ${question?.marks ?? 1} Marks',
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: isCorrect ? Colors.green.shade800 : Colors.red.shade800,
@@ -371,39 +519,34 @@ class SubmissionReviewScreen extends StatelessWidget {
                                   ],
                                 ),
                                 const SizedBox(height: 8),
-                                Text(question.text, style: const TextStyle(fontSize: 15)),
+                                Text(question?.body ?? 'Question ID: $qId', style: const TextStyle(fontSize: 15)),
                                 const SizedBox(height: 12),
 
                                 // Options display
-                                for (int i = 0; i < question.options.length; i++) ...[
-                                  _buildOptionRow(
-                                    question.options[i],
-                                    isCorrectAnswer: i == question.correctOptionIndex,
-                                    isStudentChoice: selectedIdx == i,
+                                if (question != null) ...[
+                                  for (int i = 0; i < question.options.length; i++) ...[
+                                    _buildOptionRow(
+                                      question.options[i],
+                                      isCorrectAnswer: i == question.correctOptionIndex,
+                                      isStudentChoice: selectedIdx == i,
+                                    ),
+                                  ],
+                                ],
+
+                                // Hash chain link display
+                                if (answer != null && answer.hashChainLink.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '🔗 Hash Link: ${answer.hashChainLink}',
+                                    style: TextStyle(fontSize: 10, color: Colors.grey.shade600, fontFamily: 'monospace'),
                                   ),
                                 ],
 
-                                if (question.explanation != null && question.explanation!.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Icon(Icons.lightbulb_outline, size: 16, color: Colors.amber),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            'Explanation: ${question.explanation}',
-                                            style: const TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                if (question?.explanation != null && question!.explanation!.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '💡 Explanation: ${question.explanation}',
+                                    style: const TextStyle(fontSize: 12, color: Colors.grey),
                                   ),
                                 ],
                               ],
