@@ -17,8 +17,11 @@ class StudentLobbyScreen extends ConsumerWidget {
     final teacherState = ref.watch(teacherSessionProvider);
     final activeSession = teacherState.activeSession;
 
-    // If teacher starts the session, automatically navigate to attempt screen
-    if (activeSession != null && activeSession.status == SessionStatus.inProgress) {
+    // If teacher starts the session (either local state or remote LAN event), navigate to attempt screen
+    final isStarted = (activeSession != null && activeSession.status == SessionStatus.inProgress) ||
+        quizState.isSessionStarted;
+
+    if (isStarted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.pushReplacement(
           context,

@@ -2,16 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:classsync/core/crypto/crypto_service.dart';
-import 'package:classsync/core/crypto/deterministic_ids.dart';
-import 'package:classsync/core/crypto/hash_chain.dart';
 import 'package:classsync/core/p2p/dtn_reconnect_manager.dart';
 import 'package:classsync/core/p2p/p2p_transport.dart';
 import 'package:classsync/core/p2p/simulated_p2p_transport.dart';
 import 'package:classsync/core/storage/database_service.dart';
-import 'package:classsync/models/answer.dart';
 import 'package:classsync/models/question.dart';
 import 'package:classsync/models/quiz.dart';
-import 'package:classsync/models/session.dart';
 import 'package:classsync/models/student.dart';
 import 'package:classsync/models/submission.dart';
 import 'package:classsync/providers/student_quiz_provider.dart';

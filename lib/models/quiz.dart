@@ -17,7 +17,7 @@ class Quiz {
   int get questionCount => questions.length;
 
   Quiz({
-    required String quizId,
+    required this.quizId,
     this.teacherId = 'teacher_default',
     required this.title,
     this.description = '',
@@ -25,15 +25,14 @@ class Quiz {
     DateTime? createdAt,
     this.signature,
     List<Question>? questions,
-  })  : quizId = quizId,
-        createdAt = createdAt ?? DateTime.now(),
+  })  : createdAt = createdAt ?? DateTime.now(),
         questions = questions ?? [];
 
   // Convenience constructor supporting legacy parameter name 'id'
   factory Quiz.create({
     required String id,
     String teacherId = 'teacher_default',
-    required this_title,
+    required String title,
     String description = '',
     required int timeLimitMinutes,
     DateTime? createdAt,
@@ -43,7 +42,7 @@ class Quiz {
     return Quiz(
       quizId: id,
       teacherId: teacherId,
-      title: this_title,
+      title: title,
       description: description,
       timeLimitMinutes: timeLimitMinutes,
       createdAt: createdAt,

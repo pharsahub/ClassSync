@@ -54,7 +54,7 @@ class Question {
   }
 
   Question({
-    required String questionId,
+    required this.questionId,
     required this.quizId,
     required this.type,
     required this.body,
@@ -62,7 +62,7 @@ class Question {
     required this.correctAnswer,
     this.marks = 1,
     this.explanation,
-  }) : questionId = questionId;
+  });
 
   // Convenience constructor supporting legacy parameter names (id, text, correctOptionIndex)
   factory Question.create({

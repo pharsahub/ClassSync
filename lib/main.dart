@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/app_constants.dart';
 import 'core/storage/database_service.dart';
 import 'core/theme/app_theme.dart';
-import 'core/widgets/qr_placeholder_widget.dart';
 import 'core/widgets/status_badge.dart';
 import 'core/widgets/timer_display.dart';
 import 'models/question.dart';
@@ -184,21 +183,22 @@ class _MainAppShellState extends ConsumerState<MainAppShell> {
     return Scaffold(
       appBar: AppBar(
         elevation: 1,
+        titleSpacing: 10,
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.all(6),
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
                 color: colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(Icons.hub_rounded, color: colorScheme.primary, size: 18),
+              child: Icon(Icons.hub_rounded, color: colorScheme.primary, size: 15),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 5),
             const Text(
               AppConstants.appName,
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: -0.5),
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: -0.5),
             ),
           ],
         ),
@@ -216,7 +216,7 @@ class _MainAppShellState extends ConsumerState<MainAppShell> {
                 );
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 decoration: BoxDecoration(
                   color: Colors.green.shade100,
                   borderRadius: BorderRadius.circular(20),
@@ -225,12 +225,12 @@ class _MainAppShellState extends ConsumerState<MainAppShell> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.sensors, color: Colors.green, size: 12),
-                    const SizedBox(width: 4),
+                    const Icon(Icons.sensors, color: Colors.green, size: 11),
+                    const SizedBox(width: 3),
                     Text(
-                      'Live: ${activeSession.sessionCode}',
+                      activeSession.sessionCode,
                       style: TextStyle(
-                        fontSize: 10,
+                        fontSize: 9,
                         fontWeight: FontWeight.bold,
                         color: Colors.green.shade900,
                       ),
@@ -239,31 +239,32 @@ class _MainAppShellState extends ConsumerState<MainAppShell> {
                 ),
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
           ],
 
           // Role Switcher Navigation
           SegmentedButton<int>(
             showSelectedIcon: false,
-            style: const ButtonStyle(
+            style: ButtonStyle(
               visualDensity: VisualDensity.compact,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 3)),
             ),
             segments: const [
               ButtonSegment(
                 value: 0,
-                icon: Icon(Icons.school_outlined, size: 14),
-                label: Text('Teacher', style: TextStyle(fontSize: 11)),
+                icon: Icon(Icons.school_outlined, size: 12),
+                label: Text('Teacher', style: TextStyle(fontSize: 10)),
               ),
               ButtonSegment(
                 value: 1,
-                icon: Icon(Icons.person_outline, size: 14),
-                label: Text('Student', style: TextStyle(fontSize: 11)),
+                icon: Icon(Icons.person_outline, size: 12),
+                label: Text('Student', style: TextStyle(fontSize: 10)),
               ),
               ButtonSegment(
                 value: 2,
-                icon: Icon(Icons.security, size: 14),
-                label: Text('Crypto', style: TextStyle(fontSize: 11)),
+                icon: Icon(Icons.security, size: 12),
+                label: Text('Crypto', style: TextStyle(fontSize: 10)),
               ),
             ],
             selected: {_selectedTabIndex},
@@ -271,16 +272,16 @@ class _MainAppShellState extends ConsumerState<MainAppShell> {
               setState(() => _selectedTabIndex = selection.first);
             },
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
 
           // Theme Toggle
           IconButton(
             visualDensity: VisualDensity.compact,
             tooltip: widget.isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode',
             onPressed: widget.onToggleTheme,
-            icon: Icon(widget.isDarkMode ? Icons.light_mode : Icons.dark_mode, size: 16),
+            icon: Icon(widget.isDarkMode ? Icons.light_mode : Icons.dark_mode, size: 15),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
         ],
       ),
 

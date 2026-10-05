@@ -6,6 +6,7 @@ import 'package:csv/csv.dart';
 import '../core/constants/app_constants.dart';
 import '../core/crypto/crypto_service.dart';
 import '../core/crypto/hash_chain.dart';
+import '../core/p2p/lan_p2p_transport.dart';
 import '../core/storage/database_service.dart';
 import '../core/utils/id_generator.dart';
 import '../models/quiz.dart';
@@ -25,6 +26,9 @@ class TeacherState {
   final List<Session> completedSessions;
   final String? ephemeralAesKeyHex;
   final String? qrPayload;
+  final String? hostIp;
+  final int hostPort;
+  final List<String> candidateIps;
 
   const TeacherState({
     this.currentTeacher,
@@ -36,6 +40,9 @@ class TeacherState {
     this.completedSessions = const [],
     this.ephemeralAesKeyHex,
     this.qrPayload,
+    this.hostIp,
+    this.hostPort = 8765,
+    this.candidateIps = const [],
   });
 
   TeacherState copyWith({
@@ -48,6 +55,9 @@ class TeacherState {
     List<Session>? completedSessions,
     String? ephemeralAesKeyHex,
     String? qrPayload,
+    String? hostIp,
+    int? hostPort,
+    List<String>? candidateIps,
     bool clearActiveSession = false,
   }) {
     return TeacherState(
@@ -60,6 +70,9 @@ class TeacherState {
       completedSessions: completedSessions ?? this.completedSessions,
       ephemeralAesKeyHex: ephemeralAesKeyHex ?? this.ephemeralAesKeyHex,
       qrPayload: qrPayload ?? this.qrPayload,
+      hostIp: hostIp ?? this.hostIp,
+      hostPort: hostPort ?? this.hostPort,
+      candidateIps: candidateIps ?? this.candidateIps,
     );
   }
 }
@@ -176,6 +189,8 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
     );
   }
 
+  final ClassroomLanServer _lanServer = ClassroomLanServer();
+
   // -------------------------------------------------------------
   // SESSION CREATION & QR ENCODING
   // -------------------------------------------------------------
@@ -207,15 +222,6 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
     final sessionCode = IdGenerator.generateSessionCode();
     final qrToken = await _cryptoService.hashString('qr_seed:$sessionId:$aesKeyHex');
 
-    // 4. QR Code encodes ONLY session_id + ephemeral_key + session_code + teacher_pubkey
-    final qrData = jsonEncode({
-      'type': 'classsync_session',
-      'session_id': sessionId,
-      'session_code': sessionCode,
-      'ephemeral_key': aesKeyHex,
-      'teacher_pubkey': state.teacherPublicKeyHex,
-    });
-
     final newSession = Session(
       sessionId: sessionId,
       quizId: signedQuiz.quizId,
@@ -229,6 +235,46 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
       submissions: [],
     );
 
+    // 4. Start Local Offline LAN Server
+    int boundPort = 8765;
+    try {
+      boundPort = await _lanServer.start(
+        getSession: () => state.activeSession,
+        onStudentJoin: (student) async {
+          await importStudentRoster([student]);
+          final currentSession = state.activeSession;
+          if (currentSession != null) {
+            final updatedList = List<Student>.from(currentSession.connectedStudents)
+              ..removeWhere((s) => s.studentId == student.studentId)
+              ..add(student);
+            state = state.copyWith(
+              activeSession: currentSession.copyWith(connectedStudents: updatedList),
+            );
+          }
+          return true;
+        },
+        onSubmission: (submission) async {
+          return await processIncomingSubmission(submission);
+        },
+      );
+    } catch (err) {
+      // If server cannot bind (e.g. unit test or web sandbox), continue with fallback
+    }
+
+    final candidateIps = await ClassroomLanServer.getAllCandidateIps();
+    final hostIp = _lanServer.hostIp ?? (candidateIps.isNotEmpty ? candidateIps.first : '127.0.0.1');
+
+    // 5. QR Code encodes session_id + ephemeral_key + session_code + teacher_pubkey + host_ip + port
+    final qrData = jsonEncode({
+      'type': 'classsync_session',
+      'session_id': sessionId,
+      'session_code': sessionCode,
+      'ephemeral_key': aesKeyHex,
+      'teacher_pubkey': state.teacherPublicKeyHex,
+      'host_ip': hostIp,
+      'port': boundPort,
+    });
+
     final dbService = DatabaseService();
     if (dbService.isInitialized) {
       await dbService.db.insertSession(newSession);
@@ -238,9 +284,69 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
       activeSession: newSession,
       ephemeralAesKeyHex: aesKeyHex,
       qrPayload: qrData,
+      hostIp: hostIp,
+      hostPort: boundPort,
+      candidateIps: candidateIps,
     );
 
     return newSession;
+  }
+
+  Future<void> changeHostIp(String newIp) async {
+    if (state.activeSession == null) return;
+    final sessionId = state.activeSession!.sessionId;
+    final sessionCode = state.activeSession!.sessionCode;
+    final aesKeyHex = state.ephemeralAesKeyHex ?? '';
+    final port = state.hostPort;
+
+    final qrData = jsonEncode({
+      'type': 'classsync_session',
+      'session_id': sessionId,
+      'session_code': sessionCode,
+      'ephemeral_key': aesKeyHex,
+      'teacher_pubkey': state.teacherPublicKeyHex,
+      'host_ip': newIp,
+      'port': port,
+    });
+
+    state = state.copyWith(
+      hostIp: newIp,
+      qrPayload: qrData,
+    );
+  }
+
+  Future<void> refreshCandidateIps() async {
+    final candidateIps = await ClassroomLanServer.getAllCandidateIps();
+    final primaryIp = candidateIps.isNotEmpty ? candidateIps.first : '127.0.0.1';
+    final targetIp = candidateIps.contains(state.hostIp) ? state.hostIp! : primaryIp;
+
+    if (state.activeSession != null) {
+      final sessionId = state.activeSession!.sessionId;
+      final sessionCode = state.activeSession!.sessionCode;
+      final aesKeyHex = state.ephemeralAesKeyHex ?? '';
+      final port = state.hostPort;
+
+      final qrData = jsonEncode({
+        'type': 'classsync_session',
+        'session_id': sessionId,
+        'session_code': sessionCode,
+        'ephemeral_key': aesKeyHex,
+        'teacher_pubkey': state.teacherPublicKeyHex,
+        'host_ip': targetIp,
+        'port': port,
+      });
+
+      state = state.copyWith(
+        candidateIps: candidateIps,
+        hostIp: targetIp,
+        qrPayload: qrData,
+      );
+    } else {
+      state = state.copyWith(
+        candidateIps: candidateIps,
+        hostIp: targetIp,
+      );
+    }
   }
 
   Future<void> startQuizForSession() async {
@@ -257,6 +363,12 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
       await dbService.db.updateSessionStatus(updated.sessionId, SessionStatus.inProgress);
     }
 
+    _lanServer.broadcastEvent('session_started', {
+      'session_id': updated.sessionId,
+      'session_code': updated.sessionCode,
+      'status': 'inProgress',
+    });
+
     state = state.copyWith(activeSession: updated);
   }
 
@@ -268,6 +380,13 @@ class TeacherSessionNotifier extends StateNotifier<TeacherState> {
     if (dbService.isInitialized) {
       await dbService.db.updateSessionStatus(finalized.sessionId, SessionStatus.completed);
     }
+
+    _lanServer.broadcastEvent('session_ended', {
+      'session_id': finalized.sessionId,
+      'status': 'completed',
+    });
+
+    await _lanServer.stop();
 
     final updatedCompleted = List<Session>.from(state.completedSessions)..insert(0, finalized);
     state = state.copyWith(

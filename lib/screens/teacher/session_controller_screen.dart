@@ -3,9 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/widgets/qr_placeholder_widget.dart';
-import '../../core/widgets/status_badge.dart';
 import '../../models/session.dart';
-import '../../models/student.dart';
 import '../../models/submission.dart';
 import '../../providers/teacher_session_provider.dart';
 import 'submission_review_screen.dart';
@@ -18,6 +16,16 @@ class SessionControllerScreen extends ConsumerWidget {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Session Code $code copied to clipboard!'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _copyHostIp(BuildContext context, String ip, int port) {
+    Clipboard.setData(ClipboardData(text: '$ip:$port'));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Host IP ($ip:$port) copied to clipboard!'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -224,6 +232,67 @@ class SessionControllerScreen extends ConsumerWidget {
                                     session.sessionCode,
                                     Icons.vpn_key_outlined,
                                   ),
+                                  if (teacherState.hostIp != null) ...[
+                                    Row(
+                                      children: [
+                                        Icon(Icons.lan_outlined, size: 18, color: colorScheme.primary),
+                                        const SizedBox(width: 8),
+                                        const Text('Host IP (LAN): ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                        SelectableText(
+                                          '${teacherState.hostIp}:${teacherState.hostPort}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                            color: colorScheme.primary,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        IconButton(
+                                          icon: const Icon(Icons.refresh, size: 16),
+                                          tooltip: 'Re-scan Network IPs (e.g. after connecting to hotspot)',
+                                          onPressed: () {
+                                            ref.read(teacherSessionProvider.notifier).refreshCandidateIps();
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('Network adapters refreshed!'), duration: Duration(seconds: 1)),
+                                            );
+                                          },
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.copy, size: 16),
+                                          tooltip: 'Copy Host IP',
+                                          onPressed: () => _copyHostIp(context, teacherState.hostIp!, teacherState.hostPort),
+                                        ),
+                                      ],
+                                    ),
+                                    if (teacherState.candidateIps.length > 1) ...[
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          const Text('Network Adapter: ', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                          const SizedBox(width: 6),
+                                          DropdownButton<String>(
+                                            value: teacherState.candidateIps.contains(teacherState.hostIp)
+                                                ? teacherState.hostIp
+                                                : teacherState.candidateIps.first,
+                                            isDense: true,
+                                            style: const TextStyle(fontSize: 12, color: Colors.black87),
+                                            items: teacherState.candidateIps.map((ip) {
+                                              return DropdownMenuItem<String>(
+                                                value: ip,
+                                                child: Text(ip, style: const TextStyle(fontSize: 12)),
+                                              );
+                                            }).toList(),
+                                            onChanged: (newIp) {
+                                              if (newIp != null) {
+                                                ref.read(teacherSessionProvider.notifier).changeHostIp(newIp);
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                    const SizedBox(height: 8),
+                                  ],
                                   _buildInfoRow(
                                     'Host',
                                     session.teacherName,

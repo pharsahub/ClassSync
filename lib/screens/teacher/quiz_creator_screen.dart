@@ -444,60 +444,67 @@ class _QuizCreatorScreenState extends ConsumerState<QuizCreatorScreen> {
             const SizedBox(height: 10),
 
             if (draft.type == QuestionType.mcq) ...[
-              for (int optIdx = 0; optIdx < 4; optIdx++) ...[
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Row(
-                    children: [
-                      Radio<int>(
-                        value: optIdx,
-                        groupValue: draft.correctOptionIndex,
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() => draft.correctOptionIndex = val);
-                          }
-                        },
-                      ),
-                      Text(
-                        '${String.fromCharCode(65 + optIdx)}.',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          controller: draft.optionControllers[optIdx],
-                          decoration: InputDecoration(
-                            hintText: 'Option ${String.fromCharCode(65 + optIdx)}',
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          ),
-                          validator: (val) =>
-                              val == null || val.trim().isEmpty ? 'Option is required' : null,
+              RadioGroup<int>(
+                groupValue: draft.correctOptionIndex,
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() => draft.correctOptionIndex = val);
+                  }
+                },
+                child: Column(
+                  children: [
+                    for (int optIdx = 0; optIdx < 4; optIdx++) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Row(
+                          children: [
+                            Radio<int>(
+                              value: optIdx,
+                            ),
+                            Text(
+                              '${String.fromCharCode(65 + optIdx)}.',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextFormField(
+                                controller: draft.optionControllers[optIdx],
+                                decoration: InputDecoration(
+                                  hintText: 'Option ${String.fromCharCode(65 + optIdx)}',
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                ),
+                                validator: (val) =>
+                                    val == null || val.trim().isEmpty ? 'Option is required' : null,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ] else ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: RadioListTile<int>(
-                      title: const Text('True'),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(
                       value: 0,
-                      groupValue: draft.correctOptionIndex,
-                      onChanged: (val) => setState(() => draft.correctOptionIndex = val!),
+                      icon: Icon(Icons.check_circle_outline, color: Colors.green),
+                      label: Text('True is Correct'),
                     ),
-                  ),
-                  Expanded(
-                    child: RadioListTile<int>(
-                      title: const Text('False'),
+                    ButtonSegment(
                       value: 1,
-                      groupValue: draft.correctOptionIndex,
-                      onChanged: (val) => setState(() => draft.correctOptionIndex = val!),
+                      icon: Icon(Icons.cancel_outlined, color: Colors.red),
+                      label: Text('False is Correct'),
                     ),
-                  ),
-                ],
+                  ],
+                  selected: {draft.correctOptionIndex},
+                  onSelectionChanged: (selection) {
+                    setState(() => draft.correctOptionIndex = selection.first);
+                  },
+                ),
               ),
             ],
 

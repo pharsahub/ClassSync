@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'crypto_service.dart';
 
 /// Item representing an answer unit in a cryptographic hash chain.

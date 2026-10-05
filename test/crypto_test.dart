@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:classsync/core/crypto/crypto_service.dart';
 import 'package:classsync/core/crypto/hash_chain.dart';
@@ -114,7 +113,7 @@ void main() {
 
       // Tamper ciphertext
       final rawCipher = encrypted['ciphertext']!;
-      final tamperedCipher = rawCipher.substring(0, rawCipher.length - 2) + 'ff';
+      final tamperedCipher = '${rawCipher.substring(0, rawCipher.length - 2)}ff';
       final tamperedMap = {
         'ciphertext': tamperedCipher,
         'nonce': encrypted['nonce']!,
@@ -192,7 +191,7 @@ void main() {
         cryptoService: cryptoService,
       );
 
-      final ts1 = 100000;
+      const ts1 = 100000;
       final link1 = await HashChainEngine.computeLink(
         previousHash: genesis,
         questionId: 'q1',
@@ -201,7 +200,7 @@ void main() {
         cryptoService: cryptoService,
       );
 
-      final ts2 = 105000;
+      const ts2 = 105000;
       final link2 = await HashChainEngine.computeLink(
         previousHash: link1,
         questionId: 'q2',

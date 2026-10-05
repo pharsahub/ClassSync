@@ -5,9 +5,9 @@ import 'package:cryptography/cryptography.dart';
 import '../core/crypto/crypto_service.dart';
 import '../core/crypto/deterministic_ids.dart';
 import '../core/crypto/hash_chain.dart';
+import '../core/p2p/lan_p2p_transport.dart';
 import '../core/storage/database_service.dart';
 import '../models/answer.dart';
-import '../models/question.dart';
 import '../models/quiz.dart';
 import '../models/student.dart';
 import '../models/submission.dart';
@@ -29,6 +29,9 @@ class StudentQuizState {
   final Submission? finalSubmission;
   final String? errorMessage;
   final bool isQuizSignatureVerified;
+  final String? hostIp;
+  final int hostPort;
+  final bool isSessionStarted;
 
   const StudentQuizState({
     this.currentStudent,
@@ -46,6 +49,9 @@ class StudentQuizState {
     this.finalSubmission,
     this.errorMessage,
     this.isQuizSignatureVerified = true,
+    this.hostIp,
+    this.hostPort = 8765,
+    this.isSessionStarted = false,
   });
 
   StudentQuizState copyWith({
@@ -64,6 +70,9 @@ class StudentQuizState {
     Submission? finalSubmission,
     String? errorMessage,
     bool? isQuizSignatureVerified,
+    String? hostIp,
+    int? hostPort,
+    bool? isSessionStarted,
   }) {
     return StudentQuizState(
       currentStudent: currentStudent ?? this.currentStudent,
@@ -81,6 +90,9 @@ class StudentQuizState {
       finalSubmission: finalSubmission ?? this.finalSubmission,
       errorMessage: errorMessage,
       isQuizSignatureVerified: isQuizSignatureVerified ?? this.isQuizSignatureVerified,
+      hostIp: hostIp ?? this.hostIp,
+      hostPort: hostPort ?? this.hostPort,
+      isSessionStarted: isSessionStarted ?? this.isSessionStarted,
     );
   }
 }
@@ -88,6 +100,8 @@ class StudentQuizState {
 class StudentQuizNotifier extends StateNotifier<StudentQuizState> {
   final CryptoService _cryptoService;
   Timer? _timer;
+  StreamSubscription? _remoteEventsSub;
+  Timer? _pollingTimer;
 
   StudentQuizNotifier(this._cryptoService) : super(const StudentQuizState());
 
@@ -97,6 +111,9 @@ class StudentQuizNotifier extends StateNotifier<StudentQuizState> {
     required String sessionId,
     required Quiz quiz,
     String? teacherPublicKeyHex,
+    String? hostIp,
+    int hostPort = 8765,
+    bool isSessionStarted = false,
   }) async {
     _timer?.cancel();
 
@@ -144,13 +161,104 @@ class StudentQuizNotifier extends StateNotifier<StudentQuizState> {
       isTimerActive: true,
       isSubmitted: false,
       isQuizSignatureVerified: sigValid,
+      hostIp: hostIp,
+      hostPort: hostPort,
+      isSessionStarted: isSessionStarted,
     );
 
     // 4. Try resuming any previously autosaved answers from SQLite
     await _tryResumeFromStorage(subId, genesisHash);
 
-    // 5. Start timer countdown
+    // 5. Start timer
     _startTimer();
+  }
+
+  /// Connects to an offline LAN Teacher Host (e.g. running on Windows PC).
+  Future<bool> joinRemoteSession({
+    required String hostIp,
+    int port = 8765,
+    required Student student,
+    String? sessionCode,
+  }) async {
+    _timer?.cancel();
+    _remoteEventsSub?.cancel();
+    _pollingTimer?.cancel();
+
+    try {
+      // 1. Fetch active session & signed quiz from Host
+      final sessionData = await ClassroomLanClient.fetchSession(hostIp: hostIp, port: port);
+      final remoteCode = sessionData['session_code'] as String?;
+      if (sessionCode != null && sessionCode.isNotEmpty && remoteCode != null) {
+        if (sessionCode.trim().toUpperCase() != remoteCode.trim().toUpperCase()) {
+          state = state.copyWith(errorMessage: 'Session code mismatch ($sessionCode vs $remoteCode)');
+          return false;
+        }
+      }
+
+      final quizJson = sessionData['quiz'] as Map<String, dynamic>?;
+      if (quizJson == null) {
+        state = state.copyWith(errorMessage: 'Host has no active quiz loaded.');
+        return false;
+      }
+      final quiz = Quiz.fromJson(quizJson);
+      final sessionId = sessionData['session_id'] as String? ?? 'ses_remote';
+      final statusStr = sessionData['status'] as String? ?? 'waiting';
+      final isStarted = statusStr.toLowerCase().contains('progress');
+
+      // 2. Register with Host
+      await ClassroomLanClient.joinSession(
+        hostIp: hostIp,
+        port: port,
+        student: student,
+      );
+
+      // 3. Initialize local quiz state
+      await startQuizSession(
+        student: student,
+        sessionId: sessionId,
+        quiz: quiz,
+        hostIp: hostIp,
+        hostPort: port,
+        isSessionStarted: isStarted,
+      );
+
+      // 4. Listen to host events
+      _listenToRemoteHost(hostIp, port);
+
+      return true;
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'Failed to connect to host: $e');
+      return false;
+    }
+  }
+
+  void _listenToRemoteHost(String hostIp, int port) {
+    _remoteEventsSub?.cancel();
+    _pollingTimer?.cancel();
+
+    _remoteEventsSub = ClassroomLanClient.connectWebSocket(hostIp: hostIp, port: port).listen(
+      (event) {
+        if (event['event'] == 'session_started') {
+          state = state.copyWith(isSessionStarted: true);
+        }
+      },
+      onError: (_) {},
+    );
+
+    _pollingTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
+      if (state.isSessionStarted) {
+        t.cancel();
+        return;
+      }
+      try {
+        final sessionData = await ClassroomLanClient.fetchSession(hostIp: hostIp, port: port);
+        final statusStr = sessionData['status'] as String? ?? '';
+        if (statusStr.toLowerCase().contains('progress')) {
+          state = state.copyWith(isSessionStarted: true);
+          t.cancel();
+        }
+      } catch (_) {}
+    });
   }
 
   Future<void> _tryResumeFromStorage(String subId, String genesisHash) async {
@@ -309,6 +417,17 @@ class StudentQuizNotifier extends StateNotifier<StudentQuizState> {
       }
     } catch (_) {}
 
+    // Deliver submission to Teacher Host over LAN HTTP if connected remotely
+    if (state.hostIp != null) {
+      try {
+        await ClassroomLanClient.submitQuiz(
+          hostIp: state.hostIp!,
+          port: state.hostPort,
+          submission: submission,
+        );
+      } catch (_) {}
+    }
+
     state = state.copyWith(
       isSubmitted: true,
       isTimerActive: false,
@@ -320,12 +439,16 @@ class StudentQuizNotifier extends StateNotifier<StudentQuizState> {
 
   void reset() {
     _timer?.cancel();
+    _remoteEventsSub?.cancel();
+    _pollingTimer?.cancel();
     state = const StudentQuizState();
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _remoteEventsSub?.cancel();
+    _pollingTimer?.cancel();
     super.dispose();
   }
 }
